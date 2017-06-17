@@ -6,7 +6,77 @@ import hashlib
 TSUGI_CONNECTION = None
 TSUGI_PREFIX = ''
 
+TSUGI_DB_TO_ROW_FIELDS = [
+        ['lti_key', # First entry is the table name
+            ['key_id'],
+            'key_key',
+            'secret' ,
+            'new_secret',
+            ['settings_url', 'key_settings_url'],
+        ],
+        ['lti_nonce',
+            'nonce' 
+        ],
+        ['lti_context',
+            ['context_id', 'key_id'],
+            ['title', 'context_title'],
+            'context_sha256',
+            ['settings_url', 'context_settings_url'],
+            'ext_memberships_id',
+            'ext_memberships_url',
+            'lineitems_url',
+            'memberships_url'
+        ],
+        ['lti_link',
+            ['link_id', 'context_id'],
+            ['path', 'link_path'],
+            ['title', 'link_title'],
+            ['settings', 'link_settings'],
+            ['settings_url', 'link_settings_url']
+        ],
+        ['lti_user',
+            ['user_id', 'key_id'],
+            'user_key' ,
+            'user_sha256',
+            ['subscribe', 'user_subscribe'],
+            ['displayname', 'user_displayname'],
+            ['email', 'user_email'],
+            ['image', 'user_image'],
+        ],
+        ['lti_membership',
+            ['membership_id', 'user_id', 'context_id'],
+            'role',
+            'role_override'   # Make sure to think this one through
+        ],
+        ['lti_result',
+            ['result_id', 'link_id', 'context_id'],
+            'grade',
+            'result_url',
+            'sourcedid'
+        ],
+        ['profile',
+            ['profile_id', 'key_id'],
+            ['displayname', 'profile_displayname'],
+            ['email', 'profile_email'],
+            ['subscribe', 'profile_subscribe']
+        ],
+        ['lti_service',
+            ['service_id' , 'key_id'],
+            ['service_key', 'service']
+        ]
+    ]
+
 def get_launch(post_vars,session):
+
+    for tc in range(len(TSUGI_DB_TO_ROW_FIELDS)) :
+        table = TSUGI_DB_TO_ROW_FIELDS[tc]
+        for fc in range(len(table)) :
+            if fc == 0 : continue;  # skip table name
+            if type(table[fc]) == type([]) : continue
+            field = table[fc]
+            TSUGI_DB_TO_ROW_FIELDS[tc][fc] = [field,field]
+
+    print TSUGI_DB_TO_ROW_FIELDS
     my_post = extract_post(post_vars)
     print "Extracted POST", my_post
     row = load_all(my_post)
@@ -120,86 +190,25 @@ def extract_post(post) :
     return ret
 
 def load_all(post_data) :
-
-    db_to_row_fields = [
-        ['lti_key', # First entry is the table name
-            'key_id',
-            'key_key',
-            'secret' ,
-            'new_secret',
-            ['settings_url', 'key_settings_url'],
-        ],
-        ['lti_nonce',
-            'nonce' 
-        ],
-        ['lti_context',
-            'context_id',
-            ['title', 'context_title'],
-            'context_sha256',
-            ['settings_url', 'context_settings_url'],
-            'ext_memberships_id',
-            'ext_memberships_url',
-            'lineitems_url',
-            'memberships_url'
-        ],
-        ['lti_link',
-            'link_id',
-            ['path', 'link_path'],
-            ['title', 'link_title'],
-            ['settings', 'link_settings'],
-            ['settings_url', 'link_settings_url']
-        ],
-        ['lti_user',
-            'user_id',
-            'user_key' ,
-            'user_sha256',
-            'subscribe',
-            ['displayname', 'user_displayname'],
-            ['email', 'user_email'],
-            ['image', 'user_image'],
-        ],
-        ['lti_membership',
-            'membership_id',
-            'role',
-            'role_override'   # Make sure to think this one through
-        ],
-        ['lti_result',
-            'result_id',
-            'grade',
-            'result_url',
-            'sourcedid'
-        ],
-        ['profile',
-            'profile_id',
-            ['displayname', 'profile_displayname'],
-            ['email', 'profile_email'],
-            ['subscribe', 'profile_subscribe']
-        ],
-        ['lti_service',
-            'service_id' ,
-            ['service_key', 'service']
-        ]
-    ]
+    global TSUGI_DB_TO_ROW_FIELDS
 
     sql = 'SELECT '
     first = True
-    for table in db_to_row_fields :
+    for table in TSUGI_DB_TO_ROW_FIELDS :
         alias = None
         table_name = table[0]
         if not first : 
             sql += ', '
         first = False
-        for field in table[1:]:
+        alias = table[1][0][:1]
+        sql += alias + '.' + table[1][0]
+        for field in table[2:]:
             if type(field) == type([]) :
                 row_name = field[1]
                 field = field[0]
             else :
                 row_name = None
-            if alias is None : 
-                alias = field[:1]
-            else :
-                sql += ', '
-            sql += alias + '.' + field
+            sql += ', ' + alias + '.' + field
             if row_name is not None: 
                 sql += ' AS ' + row_name
         sql += '\n  '
@@ -267,7 +276,81 @@ def lti_sha256(value) :
     if value is None : return value
     return hashlib.sha256(value).hexdigest()
 
+'''
+        ['lti_context',
+            'context_id',
+            ['title', 'context_title'],
+            'context_sha256',
+            ['settings_url', 'context_settings_url'],
+            'ext_memberships_id',
+            'ext_memberships_url',
+            'lineitems_url',
+            'memberships_url'
+        ],
+'''
+
+def do_insert(core_object, row, post, actions) :
+    global TSUGI_DB_TO_ROW_FIELDS
+    table_name = 'lti_'+core_object
+    id_column = core_object+'_id'
+    key_column = core_object+'_key'
+    sha_column = core_object+'_sha256'
+
+    table = None
+    for check in TSUGI_DB_TO_ROW_FIELDS:
+        if table_name == check[0] :
+            table = check
+            break
+
+    if table is None : 
+        print "ERROR: Could not find table", table_name
+        return
+
+    if table[1][0] != id_column : 
+        print "Expecting ",id_column,"as key for", table_name, "found", table[1]
+        return
+
+    print "LSDJKD",row.get(id_column),post.get(key_column)
+    if row.get(id_column) is not None or post.get(key_column) is None: return
+
+    print "Zap"
+    connection = get_connection()
+
+    columns = '( created_at, updated_at'
+    subs = '( NOW(), NOW()'
+    parms = {}
+
+    # [0] is table_name, [1] is primary key
+    for field in table[2:] :
+        columns += ', '+field[0]
+        subs += ', :'+field[0]
+        if field[0] == sha_column : 
+            parms[field[0]] = lti_sha256(post[key_column])
+        else : 
+            parms[field[0]] = post.get(field[1])
+
+    sql = adjust_sql("INSERT INTO {$p}"+table_name+ "\n" + 
+        columns + " )\n" + "VALUES\n" + subs + " )\n")
+
+    print sql
+    print parms
+
+    with connection.cursor() as cursor:
+        # Read a single record
+        cursor.execute(sql, parms)
+        row[id_column] = cursor.lastrowid
+        # [0] is table_name, [1] is primary key
+        for field in table[2:] :
+            if field[0] == sha_column : 
+                row[field[1]] = lti_sha256(post[key_column])
+            else :
+                row[field[1]] = post.get(field[1])
+        actions.append("=== Inserted "+object+" id="+str(row[id_column]))
+        connection.commit()
+
+
 def adjust_data(row, post) :
+    global TSUGI_DB_TO_ROW_FIELDS
     print "YADA"
     connection = get_connection()
     actions = list()
@@ -295,7 +378,6 @@ def adjust_data(row, post) :
             actions.append("=== Inserted context id="+str(row['context_id'])+" "+row['context_title'])
             connection.commit()
 
+    do_insert('user', row, post, actions) 
     print actions
-
-
 
