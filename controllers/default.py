@@ -26,7 +26,7 @@ def index():
     return dict(message=T('Grr Welcome to web2py!'))
 
 def launch() : 
-    print "I HATE FRAMEWORKS"
+    print "Welcome to Launch"
     # session.y = session.get('y',0) + 1
     # print session
     launch = tsugi.get_launch(request.post_vars, session)

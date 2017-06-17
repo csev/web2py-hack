@@ -7,8 +7,9 @@ TSUGI_CONNECTION = None
 
 def get_launch(post_vars,session):
     my_post = extract_post(post_vars)
-    print my_post
+    print "Extracted POST", my_post
     row = load_all(my_post)
+    print "Loaded Row", row
 
 def get_connection() :
     global TSUGI_CONNECTION
@@ -229,11 +230,9 @@ def load_all(post_data) :
     # There should only be 1 :)
     sql += "\nLIMIT 1"
 
-    print sql
+    # print sql
 
     # The parameters
-    # >>> hashlib.sha256('sdlfdkljfdjlk').hexdigest()
-
     service = None
     if 'service' in post_data :
         service = hashlib.sha256(post_data['service']).hexdigest()
@@ -247,12 +246,13 @@ def load_all(post_data) :
         'service': service
     }
 
-    print parms
+    # print parms
 
     connection = get_connection()
-
     with connection.cursor() as cursor:
         # Read a single record
         cursor.execute(sql, parms)
         result = cursor.fetchone()
-        print result
+
+    return result
+
