@@ -1,12 +1,20 @@
 
 import re
 import pymysql
+import hashlib
+
+TSUGI_CONNECTION = None
 
 def get_launch(post_vars,session):
-    print extract_post(post_vars)
+    my_post = extract_post(post_vars)
+    print my_post
+    row = load_all(my_post)
 
 def get_connection() :
-    connection = pymysql.connect(host='localhost',
+    global TSUGI_CONNECTION
+    if TSUGI_CONNECTION is not None : return TSUGI_CONNECTION
+
+    TSUGI_CONNECTION = pymysql.connect(host='localhost',
                              user='ltiuser',
                              port=8889,
                              password='ltipassword',
@@ -14,22 +22,12 @@ def get_connection() :
                              charset='utf8mb4',
                              cursorclass=pymysql.cursors.DictCursor)
 
-    try:
-        with connection.cursor() as cursor:
-            # Read a single record
-            sql = "SELECT * FROM lti_key"
-            cursor.execute(sql)
-            result = cursor.fetchone()
-            print result
-    finally:
-        connection.close()
-
-    return connection
+    return TSUGI_CONNECTION
 
 def extract_post(post) :
     fixed = dict()
     for (k,v) in post.items():
-        if k.startswith('custom_') : 
+        if k.startswith('custom_') :
             nk = k[7:]
             if v.startswith('$') :
                 sv = v[1:].lower().replace('.','_')
@@ -39,6 +37,9 @@ def extract_post(post) :
 
     #print(fixed)
     ret = dict()
+
+    ret['key'] = fixed.get('oauth_consumer_key', None)
+    ret['nonce'] = fixed.get('oauth_nonce', None)
 
     link_key = fixed.get('resource_link_id', None)
     link_key = fixed.get('custom_resource_link_id', link_key)
@@ -115,3 +116,143 @@ def extract_post(post) :
 
     return ret
 
+def load_all(post_data) :
+
+    db_to_row_fields = [
+        ['lti_key', # First entry is the table name
+            'key_id',
+            'key_key',
+            'secret' ,
+            'new_secret',
+            ['settings_url', 'key_settings_url'],
+        ],
+        ['lti_nonce',
+            'nonce' 
+        ],
+        ['lti_context',
+            'context_id',
+            ['title', 'context_title'],
+            'context_sha256',
+            ['settings_url', 'context_settings_url'],
+            'ext_memberships_id',
+            'ext_memberships_url',
+            'lineitems_url',
+            'memberships_url'
+        ],
+        ['lti_link',
+            'link_id',
+            ['path', 'link_path'],
+            ['title', 'link_title'],
+            ['settings', 'link_settings'],
+            ['settings_url', 'link_settings_url']
+        ],
+        ['lti_user',
+            'user_id',
+            'user_key' ,
+            'user_sha256',
+            'subscribe',
+            ['displayname', 'user_displayname'],
+            ['email', 'user_email'],
+            ['image', 'user_image'],
+        ],
+        ['lti_membership',
+            'membership_id',
+            'role',
+            'role_override'   # Make sure to think this one through
+        ],
+        ['lti_result',
+            'result_id',
+            'grade',
+            'result_url',
+            'sourcedid'
+        ],
+        ['profile',
+            'profile_id',
+            ['displayname', 'profile_displayname'],
+            ['email', 'profile_email'],
+            ['subscribe', 'profile_subscribe']
+        ],
+        ['lti_service',
+            'service_id' ,
+            ['service_key', 'service']
+        ]
+    ]
+
+    sql = 'SELECT '
+    first = True
+    for table in db_to_row_fields :
+        alias = None
+        table_name = table[0]
+        if not first : 
+            sql += ', '
+        first = False
+        for field in table[1:]:
+            if type(field) == type([]) :
+                row_name = field[1]
+                field = field[0]
+            else :
+                row_name = None
+            if alias is None : 
+                alias = field[:1]
+            else :
+                sql += ', '
+            sql += alias + '.' + field
+            if row_name is not None: 
+                sql += ' AS ' + row_name
+        sql += '\n  '
+
+    # Add the JOINs
+    prefix = '';
+    sql += """\nFROM {$p}lti_key AS k
+        LEFT JOIN {$p}lti_nonce AS n ON k.key_id = n.key_id AND n.nonce = %(nonce)s
+        LEFT JOIN {$p}lti_context AS c ON k.key_id = c.key_id AND c.context_sha256 = %(context)s
+        LEFT JOIN {$p}lti_link AS l ON c.context_id = l.context_id AND l.link_sha256 = %(link)s
+        LEFT JOIN {$p}lti_user AS u ON k.key_id = u.key_id AND u.user_sha256 = %(user)s
+        LEFT JOIN {$p}lti_membership AS m ON u.user_id = m.user_id AND c.context_id = m.context_id
+        LEFT JOIN {$p}lti_result AS r ON u.user_id = r.user_id AND l.link_id = r.link_id
+        LEFT JOIN {$p}profile AS p ON u.profile_id = p.profile_id
+        LEFT JOIN {$p}lti_service AS s ON k.key_id = s.key_id AND s.service_sha256 = %(service)s
+        """.replace('{$p}',prefix)
+
+    # Add support for soft delete
+    sql += """\nWHERE k.key_sha256 = %(key)s
+        AND (k.deleted IS NULL OR k.deleted = 0)
+        AND (c.deleted IS NULL OR c.deleted = 0)
+        AND (l.deleted IS NULL OR l.deleted = 0)
+        AND (u.deleted IS NULL OR u.deleted = 0)
+        AND (m.deleted IS NULL OR m.deleted = 0)
+        AND (r.deleted IS NULL OR r.deleted = 0)
+        AND (p.deleted IS NULL OR p.deleted = 0)
+        AND (s.deleted IS NULL OR s.deleted = 0)
+        """
+
+    # There should only be 1 :)
+    sql += "\nLIMIT 1"
+
+    print sql
+
+    # The parameters
+    # >>> hashlib.sha256('sdlfdkljfdjlk').hexdigest()
+
+    service = None
+    if 'service' in post_data :
+        service = hashlib.sha256(post_data['service']).hexdigest()
+
+    parms = {
+        'key': hashlib.sha256(post_data['key']).hexdigest(),
+        'nonce': post_data['nonce'][:128],
+        'context': hashlib.sha256(post_data['context_key']).hexdigest(),
+        'link': hashlib.sha256(post_data['link_key']).hexdigest(),
+        'user': hashlib.sha256(post_data['user_key']).hexdigest(),
+        'service': service
+    }
+
+    print parms
+
+    connection = get_connection()
+
+    with connection.cursor() as cursor:
+        # Read a single record
+        cursor.execute(sql, parms)
+        result = cursor.fetchone()
+        print result
