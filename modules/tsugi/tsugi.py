@@ -358,6 +358,49 @@ def do_insert(core_object, row, post, actions) :
         actions.append("=== Inserted "+core_object+" id="+str(row[id_column]))
         connection.commit()
 
+def do_update(core_object, row, post, actions) :
+    global TSUGI_DB_TO_ROW_FIELDS
+    table_name = 'lti_'+core_object
+    id_column = core_object+'_id'
+
+    table = None
+    for check in TSUGI_DB_TO_ROW_FIELDS:
+        if table_name == check[0] :
+            table = check
+            break
+
+    if table is None : 
+        print "ERROR: Could not find table", table_name
+        return
+
+    if table[1][0] != id_column : 
+        print "Expecting ",id_column,"as key for", table_name, "found", table[1]
+        return
+
+    # We should already have a primary key
+    if row.get(id_column) is None : return
+
+    connection = get_connection()
+
+    # Add data
+    for field in table[2:] :
+        if '_sha256' in field[0] : continue   # Don't update logical key
+        # print "Check",field[1],row[field[1]],post.get(field[1])
+        if row[field[1]] == post.get(field[1]) : continue
+        sql = adjust_sql('UPDATE {$p}'+table_name+ ' SET '+field[0]+'=:value WHERE '+id_column+' = :id')
+        
+        parms = {'value': post.get(field[1]), 'id': row.get(id_column)}
+        
+        # print sql
+        # print parms
+
+        with connection.cursor() as cursor:
+            # Read a single record
+            cursor.execute(sql, parms)
+            row[field[1]] = post.get(field[1])
+            actions.append("=== Updated "+core_object+" "+field[1]+"="+post.get(field[1])+" id="+str(row[id_column]))
+            connection.commit()
+
 
 def adjust_data(row, post) :
     global TSUGI_DB_TO_ROW_FIELDS
@@ -371,6 +414,8 @@ def adjust_data(row, post) :
     do_insert('membership', row, post, actions) 
     do_insert('result', row, post, actions) 
     do_insert('service', row, post, actions) 
+
+    do_update('user', row, post, actions) 
 
     return actions
 
