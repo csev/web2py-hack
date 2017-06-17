@@ -29,6 +29,7 @@ TSUGI_DB_TO_ROW_FIELDS = [
         ],
         ['lti_link',
             ['link_id', 'context_id'],
+            'link_sha256',
             ['path', 'link_path'],
             ['title', 'link_title'],
             ['settings', 'link_settings'],
@@ -49,7 +50,7 @@ TSUGI_DB_TO_ROW_FIELDS = [
             'role_override'   # Make sure to think this one through
         ],
         ['lti_result',
-            ['result_id', 'link_id', 'context_id'],
+            ['result_id', 'link_id', 'user_id'],
             'grade',
             'result_url',
             'sourcedid'
@@ -62,6 +63,7 @@ TSUGI_DB_TO_ROW_FIELDS = [
         ],
         ['lti_service',
             ['service_id' , 'key_id'],
+            'service_sha256',
             ['service_key', 'service']
         ]
     ]
@@ -81,7 +83,8 @@ def get_launch(post_vars,session):
     print "Extracted POST", my_post
     row = load_all(my_post)
     print "Loaded Row", row
-    adjust_data(row, my_post)
+    actions = adjust_data(row, my_post)
+    print "Adjusted", actions
 
 def get_connection() :
     global TSUGI_CONNECTION
@@ -276,19 +279,6 @@ def lti_sha256(value) :
     if value is None : return value
     return hashlib.sha256(value).hexdigest()
 
-'''
-        ['lti_context',
-            'context_id',
-            ['title', 'context_title'],
-            'context_sha256',
-            ['settings_url', 'context_settings_url'],
-            'ext_memberships_id',
-            'ext_memberships_url',
-            'lineitems_url',
-            'memberships_url'
-        ],
-'''
-
 def do_insert(core_object, row, post, actions) :
     global TSUGI_DB_TO_ROW_FIELDS
     table_name = 'lti_'+core_object
@@ -310,17 +300,37 @@ def do_insert(core_object, row, post, actions) :
         print "Expecting ",id_column,"as key for", table_name, "found", table[1]
         return
 
-    print "LSDJKD",row.get(id_column),post.get(key_column)
-    if row.get(id_column) is not None or post.get(key_column) is None: return
+    # Check if this is an externally indexed table
+    external = False
+    for column in table:
+        if column[0].endswith('_sha256') : external = True
 
-    print "Zap"
+    # We already have a primary key - all good
+    if row.get(id_column) is not None : return
+
+    # We need a logical key and do not have one...
+    if external and post.get(key_column) is None: 
+        if core_object != 'service' :
+            print "Unable to find logical key for",core_object,key_column
+        return
+
     connection = get_connection()
 
     columns = '( created_at, updated_at'
     subs = '( NOW(), NOW()'
     parms = {}
 
-    # [0] is table_name, [1] is primary key
+    # [0] is table_name, [1] is primary key and foreign keys
+    # Add FK's
+    for fk in table[1][1:] : 
+        columns += ', '+fk
+        subs += ', :'+fk
+        if row.get(fk) is None : 
+            print 'Cannot insert', core_object,'without FK', fk
+            return
+        parms[fk] = row[fk]
+
+    # Add data
     for field in table[2:] :
         columns += ', '+field[0]
         subs += ', :'+field[0]
@@ -345,39 +355,22 @@ def do_insert(core_object, row, post, actions) :
                 row[field[1]] = lti_sha256(post[key_column])
             else :
                 row[field[1]] = post.get(field[1])
-        actions.append("=== Inserted "+object+" id="+str(row[id_column]))
+        actions.append("=== Inserted "+core_object+" id="+str(row[id_column]))
         connection.commit()
 
 
 def adjust_data(row, post) :
     global TSUGI_DB_TO_ROW_FIELDS
-    print "YADA"
+
     connection = get_connection()
     actions = list()
 
-    if row.get('context_id') is None and post.get('context_key') is not None:
-        print "NEEDED"
-        sql = adjust_sql("""INSERT INTO {$p}lti_context
-                ( context_key, context_sha256, settings_url, title, key_id, created_at, updated_at ) VALUES
-                ( :context_key, :context_sha256, :settings_url, :title, :key_id, NOW(), NOW() )""")
-        print sql
-        parms = {
-                'context_key': post['context_key'],
-                'context_sha256': lti_sha256(post['context_key']),
-                'settings_url': post['context_settings_url'],
-                'title': post['context_title'],
-                'key_id': row['key_id']
-        }
-        print parms
-        with connection.cursor() as cursor:
-            # Read a single record
-            cursor.execute(sql, parms)
-            row['context_id'] = cursor.lastrowid
-            row['context_title'] = post['context_title']
-            row['context_settings_url'] = post['context_settings_url']
-            actions.append("=== Inserted context id="+str(row['context_id'])+" "+row['context_title'])
-            connection.commit()
-
+    do_insert('context', row, post, actions) 
     do_insert('user', row, post, actions) 
-    print actions
+    do_insert('link', row, post, actions) 
+    do_insert('membership', row, post, actions) 
+    do_insert('result', row, post, actions) 
+    do_insert('service', row, post, actions) 
+
+    return actions
 
