@@ -4,12 +4,14 @@ import pymysql
 import hashlib
 
 TSUGI_CONNECTION = None
+TSUGI_PREFIX = ''
 
 def get_launch(post_vars,session):
     my_post = extract_post(post_vars)
     print "Extracted POST", my_post
     row = load_all(my_post)
     print "Loaded Row", row
+    adjust_data(row, my_post)
 
 def get_connection() :
     global TSUGI_CONNECTION
@@ -203,7 +205,7 @@ def load_all(post_data) :
         sql += '\n  '
 
     # Add the JOINs
-    prefix = '';
+    prefix = ''
     sql += """\nFROM {$p}lti_key AS k
         LEFT JOIN {$p}lti_nonce AS n ON k.key_id = n.key_id AND n.nonce = %(nonce)s
         LEFT JOIN {$p}lti_context AS c ON k.key_id = c.key_id AND c.context_sha256 = %(context)s
@@ -255,4 +257,45 @@ def load_all(post_data) :
         result = cursor.fetchone()
 
     return result
+
+def adjust_sql(sql) :
+    global TSUGI_PREFIX
+    sql = re.sub(r':([a-z0-9_]+)',r'%(\1)s',sql)
+    return sql.replace('{$p}', TSUGI_PREFIX)
+
+def lti_sha256(value) :
+    if value is None : return value
+    return hashlib.sha256(value).hexdigest()
+
+def adjust_data(row, post) :
+    print "YADA"
+    connection = get_connection()
+    actions = list()
+
+    if row.get('context_id') is None and post.get('context_key') is not None:
+        print "NEEDED"
+        sql = adjust_sql("""INSERT INTO {$p}lti_context
+                ( context_key, context_sha256, settings_url, title, key_id, created_at, updated_at ) VALUES
+                ( :context_key, :context_sha256, :settings_url, :title, :key_id, NOW(), NOW() )""")
+        print sql
+        parms = {
+                'context_key': post['context_key'],
+                'context_sha256': lti_sha256(post['context_key']),
+                'settings_url': post['context_settings_url'],
+                'title': post['context_title'],
+                'key_id': row['key_id']
+        }
+        print parms
+        with connection.cursor() as cursor:
+            # Read a single record
+            cursor.execute(sql, parms)
+            row['context_id'] = cursor.lastrowid
+            row['context_title'] = post['context_title']
+            row['context_settings_url'] = post['context_settings_url']
+            actions.append("=== Inserted context id="+str(row['context_id'])+" "+row['context_title'])
+            connection.commit()
+
+    print actions
+
+
 
