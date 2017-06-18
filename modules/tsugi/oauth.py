@@ -559,11 +559,11 @@ class OAuthSignatureMethod_HMAC_SHA1(OAuthSignatureMethod):
         if token and token.secret:
             key += escape(token.secret)
         raw = '&'.join(sig)
-        print '------'
-        print 'Token',token
-        print 'Consumer',consumer
-        print 'Key', key
-        print raw
+        # print '------'
+        # print 'Token',token
+        # print 'Consumer',consumer
+        # print 'Key', key
+        # print raw
         return key, raw
 
     def build_signature(self, oauth_request, consumer, token):
@@ -574,11 +574,11 @@ class OAuthSignatureMethod_HMAC_SHA1(OAuthSignatureMethod):
         # HMAC object.
         try:
             import hashlib # 2.5
-            print 'hashlib',key,raw
+            # print 'hashlib',key,raw
             hashed = hmac.new(str(key), str(raw), hashlib.sha1)
         except:
             import sha # Deprecated
-            print 'Deprecated',key,raw
+            # print 'Deprecated',key,raw
             hashed = hmac.new(key, raw, sha)
 
         # Calculate the digest base 64.
