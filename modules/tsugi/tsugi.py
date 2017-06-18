@@ -3,6 +3,15 @@ import re
 import pymysql
 import hashlib
 
+# https://github.com/idan/oauthlib/blob/master/oauthlib/oauth1/rfc5849/endpoints/base.py
+# https://github.com/idan/oauthlib/blob/master/oauthlib/oauth1/rfc5849/endpoints/signature_only.py
+# from oauthlib.oauth1 import SignatureOnlyEndpoint
+# import oauthlib.oauth1.rfc5849.signature as signature
+
+import oauth as oauth
+import trivialstore as trivialstore
+
+
 TSUGI_CONNECTION = None
 TSUGI_PREFIX = ''
 
@@ -68,7 +77,7 @@ TSUGI_DB_TO_ROW_FIELDS = [
         ]
     ]
 
-def get_launch(post_vars,session):
+def get_launch(request,post_vars,session):
 
     for tc in range(len(TSUGI_DB_TO_ROW_FIELDS)) :
         table = TSUGI_DB_TO_ROW_FIELDS[tc]
@@ -83,6 +92,26 @@ def get_launch(post_vars,session):
     print "Extracted POST", my_post
     row = load_all(my_post)
     print "Loaded Row", row
+    key = row['key_key']
+    secret = row['secret']
+    print "Key,Secret",key,secret
+
+    url = '%s://%s%s' % (request.env.wsgi_url_scheme, request.env.http_host,
+               request.env.request_uri)
+
+    print "URL", url
+
+    oauth_request = oauth.OAuthRequest.from_request('POST', url, None, post_vars)
+    ts = trivialstore.TrivialDataStore()
+    trivialstore.secret = secret
+    print ts
+    server = oauth.OAuthServer(ts)
+    server.add_signature_method(oauth.OAuthSignatureMethod_HMAC_SHA1())
+    consumer = oauth.OAuthConsumer(key,secret)
+    verify = server._check_signature(oauth_request, consumer, None)
+    print '-----'
+    print verify
+
     actions = adjust_data(row, my_post)
     print "Adjusted", actions
 
