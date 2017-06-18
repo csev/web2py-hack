@@ -15,21 +15,40 @@ import trivialstore as trivialstore
 TSUGI_CONNECTION = None
 TSUGI_PREFIX = ''
 
+''' This is the data structure that drives Tsugi's core operations
+(1) extract_post - parsing post data to internal values
+(2) load_all - retrieving data from the core tables
+(3) adjust_data - make sure that post data is inserted / updated into DB
+
+Each row works as follows:
+- the first row is the name of the table (sans prefix)
+- the second row is the primary key (if any) followed by the foreign keys (if any)
+- The rest of the rows are
+  [name in db, name in lti object, name(s) from post data]
+
+Database columns that end in _key are the "logical key" for the row, but these are
+run through sha256 and stored in the _sha256 columns which is marked in the
+DB as the actual logical key for the row.  This approach is taken to allow
+the _key values be text and unindexed and apply the index to the _sha256
+column instead.
+
+'''
 TSUGI_DB_TO_ROW_FIELDS = [
-        ['lti_key', # First entry is the table name
+        ['lti_key',
             ['key_id'],
-            'key_key',
+            'key_key',  # No sha256 because we don't insert key rows
             'secret' ,
             'new_secret',
             ['settings_url', 'key_settings_url'],
         ],
         ['lti_nonce',
-            'nonce' 
+            'nonce'
         ],
         ['lti_context',
             ['context_id', 'key_id'],
-            ['title', 'context_title'],
+            'context_key',
             'context_sha256',
+            ['title', 'context_title'],
             ['settings_url', 'context_settings_url'],
             'ext_memberships_id',
             'ext_memberships_url',
@@ -38,6 +57,7 @@ TSUGI_DB_TO_ROW_FIELDS = [
         ],
         ['lti_link',
             ['link_id', 'context_id'],
+            'link_key',
             'link_sha256',
             ['path', 'link_path'],
             ['title', 'link_title'],
@@ -77,7 +97,7 @@ TSUGI_DB_TO_ROW_FIELDS = [
         ]
     ]
 
-def get_launch(request,post_vars,session):
+def web2py(request, response, session):
 
     for tc in range(len(TSUGI_DB_TO_ROW_FIELDS)) :
         table = TSUGI_DB_TO_ROW_FIELDS[tc]
@@ -88,7 +108,7 @@ def get_launch(request,post_vars,session):
             TSUGI_DB_TO_ROW_FIELDS[tc][fc] = [field,field]
 
     print TSUGI_DB_TO_ROW_FIELDS
-    my_post = extract_post(post_vars)
+    my_post = extract_post(request.post_vars)
     print "Extracted POST", my_post
     row = load_all(my_post)
     print "Loaded Row", row
@@ -100,7 +120,7 @@ def get_launch(request,post_vars,session):
 
     print "Key, Secret, URL", key,secret, url
 
-    oauth_request = oauth.OAuthRequest.from_request('POST', url, None, post_vars)
+    oauth_request = oauth.OAuthRequest.from_request('POST', url, None, request.post_vars)
     ts = trivialstore.TrivialDataStore()
     trivialstore.secret = secret
     server = oauth.OAuthServer(ts)
@@ -110,8 +130,8 @@ def get_launch(request,post_vars,session):
         verify = server._check_signature(oauth_request, consumer, None)
     except oauth.OAuthError as oae:
         print "OAuth Failed"
-        print oauth_request.last_base_signature
         print oae.mymessage
+        response.headers['X-Tsugi-Error-Detail'] = oae.mymessage
         return
 
     print '----- Success ----'
@@ -234,7 +254,7 @@ def load_all(post_data) :
     for table in TSUGI_DB_TO_ROW_FIELDS :
         alias = None
         table_name = table[0]
-        if not first : 
+        if not first :
             sql += ', '
         first = False
         alias = table[1][0][:1]
@@ -246,7 +266,7 @@ def load_all(post_data) :
             else :
                 row_name = None
             sql += ', ' + alias + '.' + field
-            if row_name is not None: 
+            if row_name is not None:
                 sql += ' AS ' + row_name
         sql += '\n  '
 
@@ -326,11 +346,11 @@ def do_insert(core_object, row, post, actions) :
             table = check
             break
 
-    if table is None : 
+    if table is None :
         print "ERROR: Could not find table", table_name
         return
 
-    if table[1][0] != id_column : 
+    if table[1][0] != id_column :
         print "Expecting ",id_column,"as key for", table_name, "found", table[1]
         return
 
@@ -343,7 +363,7 @@ def do_insert(core_object, row, post, actions) :
     if row.get(id_column) is not None : return
 
     # We need a logical key and do not have one...
-    if external and post.get(key_column) is None: 
+    if external and post.get(key_column) is None:
         if core_object != 'service' :
             print "Unable to find logical key for",core_object,key_column
         return
@@ -356,10 +376,10 @@ def do_insert(core_object, row, post, actions) :
 
     # [0] is table_name, [1] is primary key and foreign keys
     # Add FK's
-    for fk in table[1][1:] : 
+    for fk in table[1][1:] :
         columns += ', '+fk
         subs += ', :'+fk
-        if row.get(fk) is None : 
+        if row.get(fk) is None :
             print 'Cannot insert', core_object,'without FK', fk
             return
         parms[fk] = row[fk]
@@ -368,12 +388,12 @@ def do_insert(core_object, row, post, actions) :
     for field in table[2:] :
         columns += ', '+field[0]
         subs += ', :'+field[0]
-        if field[0] == sha_column : 
+        if field[0] == sha_column :
             parms[field[0]] = lti_sha256(post[key_column])
-        else : 
+        else :
             parms[field[0]] = post.get(field[1])
 
-    sql = adjust_sql("INSERT INTO {$p}"+table_name+ "\n" + 
+    sql = adjust_sql("INSERT INTO {$p}"+table_name+ "\n" +
         columns + " )\n" + "VALUES\n" + subs + " )\n")
 
     print sql
@@ -385,7 +405,7 @@ def do_insert(core_object, row, post, actions) :
         row[id_column] = cursor.lastrowid
         # [0] is table_name, [1] is primary key
         for field in table[2:] :
-            if field[0] == sha_column : 
+            if field[0] == sha_column :
                 row[field[1]] = lti_sha256(post[key_column])
             else :
                 row[field[1]] = post.get(field[1])
@@ -403,11 +423,11 @@ def do_update(core_object, row, post, actions) :
             table = check
             break
 
-    if table is None : 
+    if table is None :
         print "ERROR: Could not find table", table_name
         return
 
-    if table[1][0] != id_column : 
+    if table[1][0] != id_column :
         print "Expecting ",id_column,"as key for", table_name, "found", table[1]
         return
 
@@ -422,9 +442,9 @@ def do_update(core_object, row, post, actions) :
         # print "Check",field[1],row[field[1]],post.get(field[1])
         if row[field[1]] == post.get(field[1]) : continue
         sql = adjust_sql('UPDATE {$p}'+table_name+ ' SET '+field[0]+'=:value WHERE '+id_column+' = :id')
-        
+
         parms = {'value': post.get(field[1]), 'id': row.get(id_column)}
-        
+
         # print sql
         # print parms
 
@@ -442,14 +462,14 @@ def adjust_data(row, post) :
     connection = get_connection()
     actions = list()
 
-    do_insert('context', row, post, actions) 
-    do_insert('user', row, post, actions) 
-    do_insert('link', row, post, actions) 
-    do_insert('membership', row, post, actions) 
-    do_insert('result', row, post, actions) 
-    do_insert('service', row, post, actions) 
+    do_insert('context', row, post, actions)
+    do_insert('user', row, post, actions)
+    do_insert('link', row, post, actions)
+    do_insert('membership', row, post, actions)
+    do_insert('result', row, post, actions)
+    do_insert('service', row, post, actions)
 
-    do_update('user', row, post, actions) 
+    do_update('user', row, post, actions)
 
     return actions
 

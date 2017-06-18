@@ -34,7 +34,6 @@ import binascii
 VERSION = '1.0' # Hi Blaine!
 HTTP_METHOD = 'GET'
 SIGNATURE_METHOD = 'PLAINTEXT'
-LAST_BASE_SIGNATURE = None
 
 
 class OAuthError(RuntimeError):
@@ -131,8 +130,6 @@ class OAuthRequest(object):
     http_method = HTTP_METHOD
     http_url = None
     version = VERSION
-    # @drchuck support for returning the base signature
-    last_base_signature = None
 
     def __init__(self, http_method=HTTP_METHOD, http_url=None, parameters=None):
         self.http_method = http_method
@@ -444,14 +441,12 @@ class OAuthServer(object):
             signature = oauth_request.get_parameter('oauth_signature')
         except:
             raise OAuthError('Missing signature.')
-        oauth_request.last_base_signature = None  # Chuck last base
         # Validate the signature.
         valid_sig = signature_method.check_signature(oauth_request, consumer,
             token, signature)
         if not valid_sig:
             key, base = signature_method.build_signature_base_string(
                 oauth_request, consumer, token)
-            oauth_request.last_base_signature = base  # Chuck last base
             raise OAuthError('Invalid signature. Expected signature base '
                 'string: %s' % base)
         built = signature_method.build_signature(oauth_request, consumer, token)
@@ -564,11 +559,6 @@ class OAuthSignatureMethod_HMAC_SHA1(OAuthSignatureMethod):
         if token and token.secret:
             key += escape(token.secret)
         raw = '&'.join(sig)
-        # print '------'
-        # print 'Token',token
-        # print 'Consumer',consumer
-        # print 'Key', key
-        # print raw
         return key, raw
 
     def build_signature(self, oauth_request, consumer, token):
@@ -579,11 +569,9 @@ class OAuthSignatureMethod_HMAC_SHA1(OAuthSignatureMethod):
         # HMAC object.
         try:
             import hashlib # 2.5
-            # print 'hashlib',key,raw
-            hashed = hmac.new(str(key), str(raw), hashlib.sha1)
+            hashed = hmac.new(key, raw, hashlib.sha1)
         except:
             import sha # Deprecated
-            # print 'Deprecated',key,raw
             hashed = hmac.new(key, raw, sha)
 
         # Calculate the digest base 64.

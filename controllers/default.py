@@ -29,8 +29,7 @@ def launch() :
     print "Welcome to Launch"
     # session.y = session.get('y',0) + 1
     # print session
-    launch = tsugi.get_launch(request, request.post_vars, session)
-    connection = tsugi.get_connection()
+    launch = tsugi.web2py(request, response, session)
     # redirect("http://www.tsugi.org")
     return ""
 
