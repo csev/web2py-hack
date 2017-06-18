@@ -94,22 +94,27 @@ def get_launch(request,post_vars,session):
     print "Loaded Row", row
     key = row['key_key']
     secret = row['secret']
-    print "Key,Secret",key,secret
 
     url = '%s://%s%s' % (request.env.wsgi_url_scheme, request.env.http_host,
                request.env.request_uri)
 
-    print "URL", url
+    print "Key, Secret, URL", key,secret, url
 
     oauth_request = oauth.OAuthRequest.from_request('POST', url, None, post_vars)
     ts = trivialstore.TrivialDataStore()
     trivialstore.secret = secret
-    print ts
     server = oauth.OAuthServer(ts)
     server.add_signature_method(oauth.OAuthSignatureMethod_HMAC_SHA1())
     consumer = oauth.OAuthConsumer(key,secret)
-    verify = server._check_signature(oauth_request, consumer, None)
-    print '-----'
+    try:
+        verify = server._check_signature(oauth_request, consumer, None)
+    except oauth.OAuthError as oae:
+        print "OAuth Failed"
+        print oauth_request.last_base_signature
+        print oae.mymessage
+        return
+
+    print '----- Success ----'
     print verify
 
     actions = adjust_data(row, my_post)
