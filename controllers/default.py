@@ -12,7 +12,7 @@
 # track_changes(True)
 
 import oauth.oauth as oauth
-from tsugi import tsugi
+from pytsugi import tsugi
 
 def index():
     """
